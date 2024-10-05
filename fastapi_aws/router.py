@@ -1,66 +1,69 @@
 from fastapi.routing import APIRoute
 from fastapi import APIRouter
 from fastapi.types import DecoratedCallable
-from typing import Any, Callable, Dict, List, Optional, Type, Union
-from string import Formatter
-import json
-from enum import Enum
-from fastapi.responses import JSONResponse
-from fastapi.openapi.utils import get_openapi_path
+from typing import Any, Callable, Optional, Type
 
-# Custom APIRoute class
-class AWSAPIRoute(APIRoute):
-    def __init__(
+
+from .route import AWSAPIRoute
+
+
+# Custom APIRouter class
+class AWSAPIRouter(APIRouter):
+    def __init__(self, *args, route_class: Type[APIRoute] = AWSAPIRoute, **kwargs):
+        super().__init__(*args, route_class=route_class, **kwargs)
+
+    def add_api_route(
         self,
         path: str,
         endpoint: Callable[..., Any],
         *,
         aws_integration_uri: Optional[str] = None,
         **kwargs: Any
+    ) -> None:
+        route_class = self.route_class
+        route = route_class(
+            path, endpoint, aws_integration_uri=aws_integration_uri, **kwargs
+        )
+        self.routes.append(route)
+
+    def api_route(
+        self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any
+    ) -> Callable[[DecoratedCallable], DecoratedCallable]:
+        def decorator(func: DecoratedCallable) -> DecoratedCallable:
+            self.add_api_route(
+                path, func, aws_integration_uri=aws_integration_uri, **kwargs
+            )
+            return func
+
+        return decorator
+
+    # Override the HTTP method decorators to accept aws_integration_uri
+    def get(
+        self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any
     ):
-        self.aws_integration_uri = aws_integration_uri
-        super().__init__(path, endpoint, **kwargs)
+        return self.api_route(
+            path, aws_integration_uri=aws_integration_uri, methods=["GET"], **kwargs
+        )
 
-    def get_openapi_operation(self, *, operation_id: Optional[str] = None) -> Dict[str, Any]:
-        operation = super().get_openapi_operation(operation_id=operation_id)
-        if self.aws_integration_uri:
-            path_parameters = self._extract_path_parameters(self.path_format)
-            integration = self._default_lambda_call(self.aws_integration_uri, path_parameters)
-            operation["x-amazon-apigateway-integration"] = integration["x-amazon-apigateway-integration"]
-        return operation
+    def post(
+        self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any
+    ):
+        return self.api_route(
+            path, aws_integration_uri=aws_integration_uri, methods=["POST"], **kwargs
+        )
 
-    @staticmethod
-    def _extract_path_parameters(path: str) -> List[str]:
-        formatter = Formatter()
-        return [fname for _, fname, _, _ in formatter.parse(path) if fname]
+    def put(
+        self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any
+    ):
+        return self.api_route(
+            path, aws_integration_uri=aws_integration_uri, methods=["PUT"], **kwargs
+        )
 
-    def _default_lambda_call(self, uri: str, path_parameters: List[str]) -> Dict[str, Any]:
-        request_template = {
-            "body": "$input.json('$')",
-            "httpMethod": "$context.httpMethod",
-            "resource": "$context.resourcePath",
-            "path": "$context.path",
-        }
+    def delete(
+        self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any
+    ):
+        return self.api_route(
+            path, aws_integration_uri=aws_integration_uri, methods=["DELETE"], **kwargs
+        )
 
-        if path_parameters:
-            request_template["pathParameters"] = {
-                name: f"$input.params('{name}')"
-                for name in path_parameters
-            }
-
-        return {
-            "x-amazon-apigateway-integration": {
-                "uri": uri,
-                "httpMethod": "POST",  # For Lambda proxy integration, this remains POST
-                "type": "aws_proxy",
-                "credentials": "${lambda_invoke_iam_role_arn}",  # Adjust as needed
-                "requestTemplates": {
-                    "application/json": json.dumps(request_template)
-                },
-                "responses": {
-                    "default": {
-                        "statusCode": "200"
-                    }
-                }
-            }
-        }
+    # Add other HTTP methods as needed (patch, options, head, trace)
