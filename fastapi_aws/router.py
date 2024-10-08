@@ -42,5 +42,3 @@ class AWSAPIRouter(APIRouter):
 
     def delete(self, path: str, *, aws_integration_uri: Optional[str] = None, **kwargs: Any):
         return self.api_route(path, aws_integration_uri=aws_integration_uri, methods=["DELETE"], **kwargs)
-
-    # Add other HTTP methods as needed (patch, options, head, trace)
