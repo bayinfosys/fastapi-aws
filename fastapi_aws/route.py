@@ -5,39 +5,23 @@ import json
 
 
 class AWSAPIRoute(APIRoute):
-    def __init__(
-        self,
-        path: str,
-        endpoint: Callable[..., Any],
-        *,
-        aws_integration_uri: Optional[str] = None,
-        **kwargs: Any,
-    ):
-        self.aws_integration_uri = aws_integration_uri
+    def __init__(self, path: str, endpoint: Callable[..., Any], **kwargs: Any):
+        self.aws_integration_uri = kwargs.pop('aws_integration_uri', None)
         super().__init__(path, endpoint, **kwargs)
 
-    def get_openapi_operation(
-        self, *, operation_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        operation = super().get_openapi_operation(operation_id=operation_id)
         if self.aws_integration_uri:
             path_parameters = self._extract_path_parameters(self.path_format)
-            integration = self._default_lambda_call(
-                self.aws_integration_uri, path_parameters
-            )
-            operation["x-amazon-apigateway-integration"] = integration[
-                "x-amazon-apigateway-integration"
-            ]
-        return operation
+            integration = self._default_lambda_call(self.aws_integration_uri, path_parameters)
+            if self.openapi_extra is None:
+                self.openapi_extra = {}
+            self.openapi_extra.update(integration)
 
     @staticmethod
     def _extract_path_parameters(path: str) -> List[str]:
         formatter = Formatter()
         return [fname for _, fname, _, _ in formatter.parse(path) if fname]
 
-    def _default_lambda_call(
-        self, uri: str, path_parameters: List[str]
-    ) -> Dict[str, Any]:
+    def _default_lambda_call(self, uri: str, path_parameters: List[str]) -> Dict[str, Any]:
         request_template = {
             "body": "$input.json('$')",
             "httpMethod": "$context.httpMethod",
