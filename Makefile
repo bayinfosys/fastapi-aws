@@ -6,4 +6,4 @@ venv:
 	source venv/bin/activate
 
 test: venv
-	python -m unittest tests
+	python -m unittest tests/*.py

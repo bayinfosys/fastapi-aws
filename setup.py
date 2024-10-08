@@ -6,7 +6,7 @@ setup(
     version='0.1.0',
     packages=["fastapi_aws"],
     install_requires=[
-        'fastapi>=0.70.0',
+        'fastapi-cli[standard]',
     ],
     description='AWS Integration for FastAPI',
     author='Edward Grundy',
