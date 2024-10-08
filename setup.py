@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 setup(
     name='fastapi-aws',
     version='0.1.0',
-    packages=find_packages(),
+    packages=["fastapi_aws"],
     install_requires=[
         'fastapi>=0.70.0',
     ],
