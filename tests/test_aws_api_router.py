@@ -8,7 +8,7 @@ from fastapi_aws import AWSAPIRouter, AWSAPIRoute
 
 
 class TestAWSAPIRoute(unittest.TestCase):
-    def check_aws_api_route(self, method, path, aws_integration_uri, expected_request_template):
+    def check_aws_api_route_with_lambda_uri(self, method, path, aws_lambda_uri, aws_iam_arn, expected_request_template):
         # Create a new FastAPI app and router for each test to avoid conflicts
         app = FastAPI(default_route_class=AWSAPIRoute)
         router = AWSAPIRouter()
@@ -23,7 +23,8 @@ class TestAWSAPIRoute(unittest.TestCase):
         # Apply the decorator to the endpoint
         decorator(
             path,
-            aws_integration_uri=aws_integration_uri,
+            aws_lambda_uri=aws_lambda_uri,
+            aws_iam_arn=aws_iam_arn,
             description="Test endpoint",
             summary="Test endpoint",
             tags=["test"],
@@ -47,10 +48,10 @@ class TestAWSAPIRoute(unittest.TestCase):
         integration = operation["x-amazon-apigateway-integration"]
 
         # Assert the integration details
-        self.assertEqual(integration["uri"], aws_integration_uri)
+        self.assertEqual(integration["uri"], aws_lambda_uri)
         self.assertEqual(integration["httpMethod"], "POST")
         self.assertEqual(integration["type"], "aws_proxy")
-        self.assertEqual(integration["credentials"], "${lambda_invoke_iam_role_arn}")
+        self.assertEqual(integration["credentials"], aws_iam_arn)
         self.assertIn("requestTemplates", integration)
         self.assertIn("responses", integration)
 
@@ -67,21 +68,23 @@ class TestAWSAPIRoute(unittest.TestCase):
         for method in methods:
             with self.subTest(method=method):
                 path = f"/test-{method}"
-                aws_integration_uri = "${test_function_arn}"
+                aws_lambda_uri = "${test_function_arn}"
+                aws_iam_arn = "${test_function_invoke_role_arn}"
                 expected_request_template = {
                     "body": "$input.json('$')",
                     "httpMethod": "$context.httpMethod",
                     "resource": "$context.resourcePath",
                     "path": "$context.path",
                 }
-                self.check_aws_api_route(
-                    method, path, aws_integration_uri, expected_request_template
+                self.check_aws_api_route_with_lambda_uri(
+                    method, path, aws_lambda_uri, aws_iam_arn, expected_request_template
                 )
 
     def test_aws_api_route_with_path_parameters(self):
         method = "get"
         path = "/user/{user_id}"
-        aws_integration_uri = "${user_function_arn}"
+        aws_lambda_uri = "${user_function_arn}"
+        aws_iam_arn = "${user_function_invoke_role_arn}"
         expected_request_template = {
             "body": "$input.json('$')",
             "httpMethod": "$context.httpMethod",
@@ -91,17 +94,18 @@ class TestAWSAPIRoute(unittest.TestCase):
                 "user_id": "$input.params('user_id')",
             },
         }
-        self.check_aws_api_route(
-            method, path, aws_integration_uri, expected_request_template
+        self.check_aws_api_route_with_lambda_uri(
+            method, path, aws_lambda_uri, aws_iam_arn, expected_request_template
         )
 
     def test_aws_api_route_basic(self):
-        app = FastAPI(default_route_class=AWSAPIRoute)
+        app = FastAPI()
         router = AWSAPIRouter()
 
         @router.get(
             "/user",
-            aws_integration_uri="${user_function_arn}",
+            aws_lambda_uri="${user_function_arn}",
+            aws_iam_arn = "${user_function_invoke_role_arn}",
             description="Retrieve account information for the API key of the request",
             summary="Get account info",
             tags=["account"],
@@ -130,7 +134,7 @@ class TestAWSAPIRoute(unittest.TestCase):
         self.assertEqual(integration["uri"], "${user_function_arn}")
         self.assertEqual(integration["httpMethod"], "POST")
         self.assertEqual(integration["type"], "aws_proxy")
-        self.assertEqual(integration["credentials"], "${lambda_invoke_iam_role_arn}")
+        self.assertEqual(integration["credentials"], "${user_function_invoke_role_arn}")
         self.assertIn("requestTemplates", integration)
         self.assertIn("responses", integration)
 

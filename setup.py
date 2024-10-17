@@ -1,3 +1,5 @@
+from setuptools import setup
+
 setup(
     name="fastapi-aws",
     version="0.1.0",
