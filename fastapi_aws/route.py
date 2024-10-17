@@ -61,8 +61,6 @@ class AWSAPIRoute(APIRoute):
         else:
             raise ValueError("expected one of [aws_lambda_uri, aws_sfn_sync_arn, openapi_extra.x-amazon-apigateway-integration]")
 
-        print("'%s': '%s'" % (path, json.dumps(integration)))
-
         if self.openapi_extra is None:
             self.openapi_extra = {}
 

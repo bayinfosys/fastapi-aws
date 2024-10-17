@@ -8,7 +8,9 @@ from fastapi_aws import AWSAPIRouter, AWSAPIRoute
 
 
 class TestAWSAPIRoute(unittest.TestCase):
-    def check_aws_api_route_with_lambda_uri(self, method, path, aws_lambda_uri, aws_iam_arn, expected_request_template):
+    def check_aws_api_route_with_lambda_uri(
+        self, method, path, aws_lambda_uri, aws_iam_arn, expected_request_template
+    ):
         # Create a new FastAPI app and router for each test to avoid conflicts
         app = FastAPI(default_route_class=AWSAPIRoute)
         router = AWSAPIRouter()
@@ -56,7 +58,9 @@ class TestAWSAPIRoute(unittest.TestCase):
         self.assertIn("responses", integration)
 
         # Check the request template
-        request_template = json.loads(integration["requestTemplates"]["application/json"])
+        request_template = json.loads(
+            integration["requestTemplates"]["application/json"]
+        )
         self.assertEqual(
             request_template,
             expected_request_template,
@@ -105,7 +109,7 @@ class TestAWSAPIRoute(unittest.TestCase):
         @router.get(
             "/user",
             aws_lambda_uri="${user_function_arn}",
-            aws_iam_arn = "${user_function_invoke_role_arn}",
+            aws_iam_arn="${user_function_invoke_role_arn}",
             description="Retrieve account information for the API key of the request",
             summary="Get account info",
             tags=["account"],
@@ -139,7 +143,9 @@ class TestAWSAPIRoute(unittest.TestCase):
         self.assertIn("responses", integration)
 
         # Check the request template
-        request_template = json.loads(integration["requestTemplates"]["application/json"])
+        request_template = json.loads(
+            integration["requestTemplates"]["application/json"]
+        )
         expected_request_template = {
             "body": "$input.json('$')",
             "httpMethod": "$context.httpMethod",
