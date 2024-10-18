@@ -2,12 +2,17 @@ from setuptools import setup
 
 setup(
     name="fastapi-aws",
-    version="0.1.0",
+    use_scm_version={
+        "write_to": "fastapi_aws/_version.py",
+    },
     packages=["fastapi_aws"],
     install_requires=[
         "fastapi",
+        "httpx"
     ],
-    description="AWS Integration for FastAPI",
+    description="AWS Integrations for FastAPI exported OpenAPI specifications",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
     author="Edward Grundy",
     author_email="ed@bayis.co.uk",
     url="https://github.com/bayinfosys/fastapi-aws",
