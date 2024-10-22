@@ -33,15 +33,22 @@ class AWSAuthorizer(HTTPBearer):
         authorizer_name: str,
         authorizer_type: str,
         auto_error: bool = True,
-        header_name: str = None,
+        header_names: list = None,
+        ttl: int = 0
     ):
         self.scheme_name = authorizer_name
         self.auto_error = auto_error
+        self.ttl = 0
 
         assert authorizer_type in ("token", "request", "cognito_user_pools")
         self.authorizer_type = authorizer_type
 
-        self.header_name = header_name or AWSAuthorizer.DEFAULT_HEADER_FIELDNAME
+        if header_names is None:
+            self.header_names = [AWSAuthorizer.DEFAULT_HEADER_FIELDNAME]
+        elif not isinstance(header_names, list):
+            self.header_names = [header_names]
+        else:
+            self.header_names = header_names
 
         self.model = self._create_model()
 
@@ -62,7 +69,11 @@ class CognitoAuthorizer(AWSAuthorizer):
     DEFAULT_USER_POOL_ARN = "${cognito_user_pool_arn}"
 
     def __init__(
-        self, authorizer_name: str, auto_error: bool = True, user_pool_arn=None
+        self,
+        authorizer_name: str,
+        auto_error: bool = True,
+        user_pool_arn=None,
+        header_names=None,
     ):
         """Initialize with the authorizer name.
 
@@ -71,18 +82,24 @@ class CognitoAuthorizer(AWSAuthorizer):
         """
         self.user_pool_arn = user_pool_arn or CognitoAuthorizer.DEFAULT_USER_POOL_ARN
 
-        super().__init__(authorizer_name, "cognito_user_pools", auto_error)
+        super().__init__(
+            authorizer_name,
+            "cognito_user_pools",
+            auto_error=auto_error,
+            header_names=header_names,
+        )
 
     def _create_model(self):
         return APIKey(
             **{
                 "type": "apiKey",
                 "in": "header",
-                "name": "Authorization",
+                "name": self.scheme_name,
                 "x-amazon-apigateway-authtype": "cognito_user_pools",
                 "x-amazon-apigateway-authorizer": {
                     "type": self.authorizer_type,
                     "providerARNs": [self.user_pool_arn],
+                    "authorizerResultTtlInSeconds": self.ttl,
                 },
             }
         )
@@ -98,9 +115,11 @@ class APIKeyAuthorizer(AWSAuthorizer):
     DEFAULT_HEADER_FIELD_NAME = "x-api-key"
 
     def __init__(
-        self, *, authorizer_name: str, auto_error: bool = True, header_name: str = None
+        self, *, authorizer_name: str, auto_error: bool = True, header_names: str = None
     ):
-        super().__init__(authorizer_name, "token", auto_error=auto_error)
+        super().__init__(
+            authorizer_name, "token", auto_error=auto_error, header_names=header_names
+        )
 
     def _create_model(self):
         raise NotImplementedError()
@@ -118,18 +137,19 @@ class LambdaAuthorizer(AWSAuthorizer):
         *,
         authorizer_name: str,
         auto_error: bool = True,
-        header_name: str = None,
+        header_names: list = None,
         aws_lambda_uri: str = None,
         aws_iam_role_arn: str = None,
     ):
         assert aws_lambda_uri is not None
         assert aws_iam_role_arn is not None
 
-        self.header_name = header_name
         self.aws_lambda_uri = aws_lambda_uri
         self.aws_iam_role_arn = aws_iam_role_arn
 
-        super().__init__(authorizer_name, "request", auto_error=auto_error)
+        super().__init__(
+            authorizer_name, "request", auto_error=auto_error, header_names=header_names
+        )
 
     def _create_model(self):
         authorizer_params = {
@@ -137,21 +157,26 @@ class LambdaAuthorizer(AWSAuthorizer):
             "authorizerUri": self.aws_lambda_uri,
             "authorizerCredentials": self.aws_iam_role_arn,
             "identityValidationExpression": "^x-[a-z]+",
-            "authorizerResultTtlInSeconds": 60,
+            "authorizerResultTtlInSeconds": self.ttl,
         }
 
         if self.authorizer_type == "request":
             assert (
-                self.header_name is not None
-            ), "header_name is required when authorizer_type is 'request'"
-            authorizer_params.update(
-                {"identitySource": f"method.request.header.{self.header_name}"}
-            )
+                self.header_names is not None
+            ), "header_names is required when authorizer_type is 'request'"
+
+            mappings = [
+                ".".join(("method", "request", "header", name))
+                for name in self.header_names
+            ]
+
+            authorizer_params.update({"identitySource": ", ".join(mappings)})
+            print("%s: identity_source: '%s'" % ("auth", str(authorizer_params)))
 
         return APIKey(
             **{
                 "type": "apiKey",
-                "name": self.header_name or LambdaAuthorizer.DEFAULT_HEADER_FIELDNAME,
+                "name": self.scheme_name,
                 "in": "header",
                 "x-amazon-apigateway-authtype": "custom",
                 "x-amazon-apigateway-authorizer": authorizer_params,
