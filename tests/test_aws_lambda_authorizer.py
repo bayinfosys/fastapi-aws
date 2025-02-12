@@ -1,4 +1,3 @@
-# tests/test_authorizers.py (continued)
 import unittest
 from fastapi import FastAPI, Security
 from fastapi.openapi.utils import get_openapi
@@ -14,12 +13,14 @@ class TestLambdaAuthorizer(unittest.TestCase):
         lambda_uri = "${lambda_authorizer_uri}"
         iam_role_arn = "${lambda_authorizer_iam_role_arn}"
         header_name = "Authorization"
+        ttl = 60
 
         lambda_auth = LambdaAuthorizer(
             authorizer_name=authorizer_name,
             aws_lambda_uri=lambda_uri,
             aws_iam_role_arn=iam_role_arn,
-            header_name=header_name,
+            header_names=[header_name],
+            ttl=ttl,
         )
 
         # Define a test route using the lambda_auth
@@ -97,6 +98,6 @@ class TestLambdaAuthorizer(unittest.TestCase):
         )
         self.assertEqual(
             authorizer_details["authorizerResultTtlInSeconds"],
-            60,
+            ttl,
             "Incorrect authorizerResultTtlInSeconds",
         )

@@ -1,4 +1,3 @@
-# tests/test_authorizers.py (continued)
 import unittest
 from fastapi import FastAPI, Security
 from fastapi.openapi.utils import get_openapi
@@ -15,5 +14,5 @@ class TestAPIKeyAuthorizer(unittest.TestCase):
 
         with self.assertRaises(NotImplementedError):
             api_key_auth = APIKeyAuthorizer(
-                authorizer_name=authorizer_name, header_name=header_name
+                authorizer_name=authorizer_name, header_names=[header_name]
             )

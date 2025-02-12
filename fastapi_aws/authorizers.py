@@ -15,7 +15,7 @@ refs:
 """
 from fastapi import Request
 from fastapi.security import HTTPBearer
-from fastapi.openapi.models import SecuritySchemeType, APIKey
+from fastapi.openapi.models import APIKey
 
 
 class AWSAuthorizer(HTTPBearer):
@@ -34,11 +34,11 @@ class AWSAuthorizer(HTTPBearer):
         authorizer_type: str,
         auto_error: bool = True,
         header_names: list = None,
-        ttl: int = 0
+        ttl: int = 0,
     ):
         self.scheme_name = authorizer_name
         self.auto_error = auto_error
-        self.ttl = 0
+        self.ttl = ttl
 
         assert authorizer_type in ("token", "request", "cognito_user_pools")
         self.authorizer_type = authorizer_type
@@ -137,9 +137,9 @@ class LambdaAuthorizer(AWSAuthorizer):
         *,
         authorizer_name: str,
         auto_error: bool = True,
-        header_names: list = None,
         aws_lambda_uri: str = None,
         aws_iam_role_arn: str = None,
+        **kwargs
     ):
         assert aws_lambda_uri is not None
         assert aws_iam_role_arn is not None
@@ -147,9 +147,7 @@ class LambdaAuthorizer(AWSAuthorizer):
         self.aws_lambda_uri = aws_lambda_uri
         self.aws_iam_role_arn = aws_iam_role_arn
 
-        super().__init__(
-            authorizer_name, "request", auto_error=auto_error, header_names=header_names
-        )
+        super().__init__(authorizer_name, "request", auto_error=auto_error, **kwargs)
 
     def _create_model(self):
         authorizer_params = {

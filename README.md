@@ -23,10 +23,13 @@ Import the `AWSAPIRouter` which uses the default `AWSAPIRoute` to define routes.
 Simply use one of the following integration keywords to define the `openapi_extra` contents:
 + `aws_lambda_uri` trigger a lambda function
 + `aws_sfn_sync_arn` invoke a step-function synchronously
-+ `aws_s3_object` s3 object access from apigw (TBD)
++ `aws_s3_bucket` s3 object access from apigw
 + `mock_response` fixed apigw responses (TBD)
++ `dynamodb` dynamodb queries via apigw endpoints (TBD)
 
 The keyword-argument is used to define the format of the `x-amazon-apigateway-integration` added to the `openapi_extra` parameter.
+
+**NOTE**: the default `FastAPI.router` should be replaced with a new `AWSAPIRouter` **before** adding any routes. If routes are added to the router, and the `app.include_router(aws_router)` is called, the `app.include_router` method will fail to pass the aws kwargs and cause the `AWSAPIRoute` to throw a `ValueError`. This is due to FastAPI sanitizing the kwargs to routes.
 
 
 ```
@@ -39,7 +42,13 @@ from fastapi_aws import AWSAPIRouter
 # Instantiate the custom router
 router = AWSAPIRouter()
 
-# Use the custom router to define routes
+# Create the FastAPI app and include the router
+# NB: the router must be overridden **before** creating any routes
+app = FastAPI()
+app.router = router
+# app.include_router(router) will cause the @router.get decorator to fail to add routes correctly
+
+# Use the custom router to define routes so we can use the .get, .post, etc methods
 @router.get(
     "/user/{name}",
     aws_lambda_uri="${user_function_arn}",
@@ -69,10 +78,6 @@ async def set_user_profile(name: str):
 )
 async def user_post_data(user_info: UserInfoModel):
     return "goodbye"
-
-# Create the FastAPI app and include the router
-app = FastAPI()
-app.include_router(router)
 ```
 
 ### Authorization
