@@ -41,7 +41,11 @@ class AWSAPIRoute(APIRoute):
         # and an entry for 'aws_iam_arn' for permission to call that service.
         selected_services = set(self._integration_registry).intersection(set(kwargs))
 
-        if len(selected_services) != 1:
+        if not selected_services:
+            # no aws integration in this route, so just call super
+            return super().__init__(path, endpoint, **kwargs)
+
+        if len(selected_services) > 1:
             raise ValueError(f"Exactly one of {self._integration_registry.keys()} is required, but found {selected_services} in {kwargs.keys()}")
 
         # pop the params from the kwargs to stop fastapi spazzing out

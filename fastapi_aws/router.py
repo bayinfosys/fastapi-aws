@@ -20,7 +20,7 @@ class AWSAPIRouter(APIRouter):
         endpoint: Callable[..., Any],
         **kwargs: Any
     ) -> None:
-        route_class = self.route_class
+        route_class = kwargs.pop("route_class_override", None) or self.route_class
         route = route_class(path, endpoint, **kwargs)
         self.routes.append(route)
 
