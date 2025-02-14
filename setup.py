@@ -8,7 +8,8 @@ setup(
     packages=["fastapi_aws"],
     install_requires=[
         "fastapi",
-        "httpx"
+        "httpx",
+        "uvicorn[standard]"
     ],
     description="AWS Integrations for FastAPI exported OpenAPI specifications",
     long_description=open("README.md").read(),

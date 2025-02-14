@@ -22,7 +22,6 @@ class TestAWSAPIRoute(unittest.TestCase):
             return {"status": "ok"}
 
         openapi_schema = app.openapi()
-        print("openapi: %s" % str(openapi_schema))
         operation = openapi_schema["paths"]["/lambda-test"]["get"]
 
         self.assertIn("x-amazon-apigateway-integration", operation)

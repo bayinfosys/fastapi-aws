@@ -2,17 +2,20 @@
 
 This extension enables routes to be defined in FastAPI with extra decorator parameters for AWS integrations.
 
-The exported `openapi.json` will then contain integrations for:
+The exported `private_openapi.json` will then contain integrations for:
 + `AWS Lambda function`
 + `AWS Step function`
++ `AWS S3 bucket`
 
 Secured via:
 + `AWS Cognito User Pools`
 + `AWS Lambda Authorizer`
 
-This specification can be uploaded to AWS APIGateway as a definition for a REST API.
+This specification can be uploaded to AWS APIGateway as a definition for a REST API (see below for automatation with terraform). CORS definitions for routes are also auto-generated.
 
 This allows your AWS APIGateway REST API to be defined in python, reference pydantic models, integrated into your application code, etc.
+
+A `public_openapi.json` is also produced which can be presented to swagger and other tools for use in documentation.
 
 
 ## Usage
@@ -32,7 +35,7 @@ The keyword-argument is used to define the format of the `x-amazon-apigateway-in
 **NOTE**: the default `FastAPI.router` should be replaced with a new `AWSAPIRouter` **before** adding any routes. If routes are added to the router, and the `app.include_router(aws_router)` is called, the `app.include_router` method will fail to pass the aws kwargs and cause the `AWSAPIRoute` to throw a `ValueError`. This is due to FastAPI sanitizing the kwargs to routes.
 
 
-```
+```python
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from fastapi.security import HTTPBearer
@@ -121,6 +124,90 @@ In the above example, the `/user/{name}` endpoint will only succeed if the corre
 
 **NB**: the assignment `user=Security...` is required to ensure export to OpenAPI.
 
+## Export OpenAPI specification
+
+The module will create an OpenAPI spec from a routes file, and output two specifications:
+1. A private OpenAPI spec with the (optional) CORS definitions and `x-amazon-apigateway-integration` definitions for consumption by AWS ApiGateway REST API, and
+2. A public OpenAPI spec which can be presented for public consumption via swagger documentation etc.
+
+NB: the python code for these endpoints will not be executed in anyway, they are purely descriptive.
+
+Given a `my-routes.py`:
+```python
+from pydantic import BaseModel
+from fastapi import Security
+
+from fastapi_aws import AWSAPIRouter, LambdaAuthorizer
+
+
+class UserRequest(BaseModel):
+    username: str
+
+
+class UserResponse(BaseModel):
+    username: str
+
+
+class UserPublicResponse(BaseModel):
+    username: str
+
+
+lambda_auth = LambdaAuthorizer(
+    authorizer_name="${lambda_authorizer_name}",
+    aws_lambda_uri="${lambda_authorizer_uri}",
+    aws_iam_role_arn="${lambda_authorizer_iam_role_arn}",
+)
+
+router = AWSAPIRouter()
+
+@router.post(
+    "/user",
+    description="post some user information",
+    response_model=UserResponse,
+    aws_lambda_uri="${polling_start_lambda_arn}",
+    aws_iam_arn="${polling_start_lambda_iam_role_arn}",
+    tags=["users"],
+)
+async def user(body: UserRequest, user=Security(lambda_auth)):
+    return UserResponse()
+
+
+@router.get(
+    "/public/user",
+    description="retrieve public user information",
+    response_model=UserPublicResponse,
+    aws_lambda_uri="${user_public_data_lambda_arn}",
+    aws_iam_arn="${user_public_data_lambda_iam_role_arn}",
+    tags=["users"],
+)
+async def fetch_user_info():
+    return UserPublicResponse()
+```
+
+
+These specifications are created from the module via:
+```bash
+fastapi_aws \
+  --title my-api \
+  --router my-routes.py \
+  --out-public ./api_public.json \
+  --out-private ./api_private.json \
+  --version 0.0.1
+```
+
+or via the docker image with:
+```bash
+docker run -it --rm \
+  -v $(shell pwd)/my-api:/app/routes:ro \
+  -v $(shell pwd)/terraform/rest-definition:/out \
+  fastapi_aws \
+    --title my-api \
+    --router routes.routes:router \
+    --out-public /out/api_public_definition.json \
+    --out-private /out/api_private_definition.json \
+    --version 0.0.1
+```
+
 
 ## Terraform integration
 
@@ -131,6 +218,7 @@ the exported `openapi.json` file can be loaded with `templatefile`.
 The template can then substitute the placeholder string with the actual lambda function arns from the terraform resources.
 
 ```terraform
+# Define a lambda function which we want to invoke from the API endpoint
 resource "aws_lambda_function" "user_function" {
   # ... Lambda configuration ...
   function_name = "user-function"
@@ -191,4 +279,29 @@ resource "aws_api_gateway_deployment" "api_deployment" {
   rest_api_id = aws_api_gateway_rest_api.api.id
   stage_name = "prod"
 }
+```
+
+## Example
+
+The following `Makefile` produces the openapi specs during a CICD process with:
+
+```makefile
+APP_NAME=Example-App
+GIT_TAG=$(shell git describe --tags)
+
+build/api-definition:
+  docker run -it --rm \
+    -v $(shell pwd)/package/src/api:/app/routes:ro \
+    -v $(shell pwd)/terraform/rest:/out \
+    fastapi_aws \
+      --title $(APP_NAME) \
+      --router routes.routes:router \
+      --out-public /out/api_public_definition.json \
+      --out-private /out/api_private_definition.json \
+      --version $(GIT_TAG)
+
+build/infrastructure:
+  terraform init
+  terraform plan -out new.plan
+  terraform apply && rm new.plan
 ```
