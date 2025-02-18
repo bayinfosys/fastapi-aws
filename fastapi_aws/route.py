@@ -1,7 +1,6 @@
 from fastapi.routing import APIRoute
 from typing import Any, Callable, List
 from string import Formatter
-import json
 
 
 def register_integration(service_name: str):
@@ -46,7 +45,9 @@ class AWSAPIRoute(APIRoute):
             return super().__init__(path, endpoint, **kwargs)
 
         if len(selected_services) > 1:
-            raise ValueError(f"Exactly one of {self._integration_registry.keys()} is required, but found {selected_services} in {kwargs.keys()}")
+            raise ValueError(
+                f"Exactly one of {self._integration_registry.keys()} is required, but found {selected_services} in {kwargs.keys()}"
+            )
 
         # pop the params from the kwargs to stop fastapi spazzing out
         aws_service_name = selected_services.pop()
@@ -65,6 +66,7 @@ class AWSAPIRoute(APIRoute):
 
         # extract the mapping templates if present
         aws_request_template = kwargs.pop("request_template", None)
+        aws_request_parameters = kwargs.pop("request_parameters", None)
         aws_mapping_template = kwargs.pop("aws_mapping_template", None)
         aws_response_template = kwargs.pop("response_template", None)
 
@@ -92,8 +94,10 @@ class AWSAPIRoute(APIRoute):
                 path_parameters=path_parameters,
                 mapping_template=aws_mapping_template,
                 request_template=aws_request_template,
+                request_parameters=aws_request_parameters,
                 response_template=aws_response_template,
-                object_key = aws_object_key,  # NB: s3 only
+                object_key=aws_object_key,  # NB: s3 only
+                http_method="GET" if "GET" in self.methods else next(iter(self.methods)),
             )
 
             integration = self._create_integration(**integration_params)
@@ -113,31 +117,75 @@ class AWSAPIRoute(APIRoute):
         uri: str,
         integration_type: str,
         credentials: str,
-        request_template,
-        response_template,
-        http_method: str = "POST"
+        responses: dict = None,
+        request_template: dict = None,
+        request_parameters: dict = None,
+        http_method: str = "POST",
     ):
         """create the x-amazon-apigateway-integration block for the openapi spec
 
         This block defines how a request is made to the backend function so is always a POST request
 
         NB: uri is not required for mock integrations, so it should be optional
+
+        request_template must be a dict of mimetype->string
+        request_parameters map request (HTTP) to integration parameter
+        responses is a dict of integration response patterns (key) to output transform
+
+        see:
+        + general: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions.html
+        + request_templates: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestTemplates.html
+        + request_parameters: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestParameters.html
+        + responses: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-response.html
         """
         assert integration_type in ("aws", "aws_proxy")
-        assert isinstance(
-            request_template, dict
-        ), "request_template must be dict [%s]" % (str(type(request_template)))
 
-        return {
-            "x-amazon-apigateway-integration": {
-                "uri": uri,
-                "httpMethod": http_method,
-                "type": integration_type,
-                "credentials": credentials,
-                "requestTemplates": {"application/json": json.dumps(request_template)},
-                "responses": response_template,
-            }
+        assert isinstance(responses, dict), "responses must be a dict [%s]" % str(
+            type(responses)
+        )
+        assert (
+            "default" in responses
+        ), "expected 'default' in responses (recieved: '%s')" % str(
+            list(responses.keys())
+        )
+
+        integration = {
+            "uri": uri,
+            "httpMethod": http_method,
+            "type": integration_type,
+            "credentials": credentials,
+            "responses": responses,
         }
+
+        if request_template is not None:
+            # request templates must be a dict of mimetypes to strings
+            # https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestTemplates.html
+            assert isinstance(
+                request_template, dict
+            ), "request_template must be dict [%s]" % (str(type(request_template)))
+
+            request_template_mimetypes = ("application/json", "application/xml")
+            assert all(
+                x_ in request_template_mimetypes for x_ in request_template
+            ), "only mimetypes are expected in request_templates (found: '%s')" % str(
+                list(request_template.keys())
+            )
+            assert all(
+                isinstance(x_, str) for x_ in request_template
+            ), "all request templates must be strings (found: '%s')" % (
+                str([str(type(x)) for x in request_template.values()])
+            )
+
+            integration["requestTemplates"] = request_template
+
+        if request_parameters is not None:
+            # TODO: validate against: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestParameters.html
+            assert isinstance(
+                request_parameters, dict
+            ), "request_parameters must be dict [%s]" % str(type(request_parameters))
+            integration["requestParameters"] = request_parameters
+
+        return {"x-amazon-apigateway-integration": integration}
 
 
 from .integrations import *

@@ -21,17 +21,37 @@ from fastapi.openapi.utils import get_openapi
 
 OPENAPI_VERSION = os.getenv("OPENAPI_VERSION", "3.0.1")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+CORS_HEADERS = os.getenv("CORS_HEADERS", "Content-Type,Authorization").split(",")
+CORS_METHODS = os.getenv("CORS_METHODS", "*").split(",")
 
 
-# Function to add CORS headers to responses
+def cors_origins() -> str:
+    """format the cors origins for apigw
+    NB: we only really allow the wildcard or a single origin, so not sure what use this is
+    """
+    return "'%s'" % ",".join(CORS_ORIGINS)
+
+
+def cors_headers() -> str:
+    """format the cors headers for apigw"""
+    return "'%s'" % ",".join(CORS_HEADERS)
+
+
+def cors_methods() -> str:
+    """format the cors methods for apigw"""
+    # return "'%s'" % ",".join(CORS_METHODS)
+    return "'OPTIONS,GET,POST,DELETE'"
+
+
 def add_cors_headers(response: Response):
-    response.headers["Access-Control-Allow-Origin"] = CORS_ORIGINS
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "OPTIONS, GET, POST, PUT, DELETE"
+    """add CORS headers to response objects for fastapi"""
+    response.headers["Access-Control-Allow-Origin"] = cors_origins()
+    response.headers["Access-Control-Allow-Headers"] = cors_headers()
+    response.headers["Access-Control-Allow-Methods"] = cors_methods()
     return response
 
 
-def cors_headers(
+def cors_headers_dependency(
     response: Response,
     access_control_allow_origin: str = Header(),
     access_control_allow_headers: str = Header(),
@@ -43,36 +63,31 @@ def cors_headers(
 def add_cors_dependency_to_router(router):
     """Add CORS headers dependency to all routes in the router"""
     for route in router.routes:
-        if (
-            "GET" in route.methods
-            or "POST" in route.methods
-            or "PUT" in route.methods
-            or "DELETE" in route.methods
-            or "PATCH" in route.methods
-        ):
-            route.dependencies.append(Depends(cors_headers))
+        if any(x in route.methods for x in CORS_METHODS):
+            route.dependencies.append(Depends(cors_headers_dependency))
 
 
-def add_cors_to_openapi(openapi_schema):
+def add_cors_responses(openapi_schema):
     """Add CORS headers to the OpenAPI schema"""
     for path, methods in openapi_schema["paths"].items():
         for method, details in methods.items():
             if "responses" in details:
                 for status, response in details["responses"].items():
-                    if "headers" not in response:
-                        response["headers"] = {}
-                    response["headers"]["Access-Control-Allow-Origin"] = {
+                    headers = response.get("headers") or {}
+                    headers["Access-Control-Allow-Origin"] = {
                         "schema": {"type": "string"},
-                        "example": "*",
+                        #                        "example": "*",
                     }
-                    response["headers"]["Access-Control-Allow-Headers"] = {
+                    headers["Access-Control-Allow-Headers"] = {
                         "schema": {"type": "string"},
-                        "example": "Content-Type, Authorization, X-Api-Key",
+                        #                        "example": "Content-Type, Authorization, X-Api-Key",
                     }
-                    response["headers"]["Access-Control-Allow-Methods"] = {
+                    headers["Access-Control-Allow-Methods"] = {
                         "schema": {"type": "string"},
-                        "example": "OPTIONS, GET, POST, PUT, DELETE, PATCH",
+                        #                        "example": "OPTIONS, GET, POST, PUT, DELETE, PATCH",
                     }
+                    response["headers"] = headers
+
     return openapi_schema
 
 
@@ -113,15 +128,17 @@ def add_options_routes(app: FastAPI):
                         "default": {
                             "statusCode": "200",
                             "responseParameters": {
-                                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,HEAD,GET,POST,PUT,PATCH,DELETE'",
-                                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-                                "method.response.header.Access-Control-Allow-Origin": "'*'",
+                                "method.response.header.Access-Control-Allow-Methods": cors_methods(),
+                                "method.response.header.Access-Control-Allow-Headers": cors_headers(),
+                                "method.response.header.Access-Control-Allow-Origin": cors_origins(),
                             },
                         }
                     },
                     "passthroughBehavior": "when_no_match",
                     "timeoutInMillis": 29000,
-                    "requestTemplates": {"application/json": '{ "statusCode": 200 }'},
+                    "requestTemplates": {
+                        "application/json": json.dumps({"statusCode": 200})
+                    },
                     "type": "mock",
                 }
             },
@@ -152,8 +169,68 @@ def make_public_api_schema(openapi_schema):
     + x-amazon-apigateway-authtype
     + x-amazon-apigateway-authorizer
     """
-    remove_keys_by_pattern(openapi_schema, 'x-amazon-apigateway-*')
+    remove_keys_by_pattern(openapi_schema, "x-amazon-apigateway-*")
     return openapi_schema
+
+
+def default_cors_headers(define_cors=True):
+    headers = {
+        "allowOrigins": "'*'",
+        "allowMethods": ["'%s'" % x for x in CORS_METHODS],
+        "allowHeaders": ["'%s'" % x for x in CORS_HEADERS],
+    }
+
+    return {"x-amazon-apigateway-cors": headers}
+
+
+def aws_gateway_responses(define_cors=True):
+    """Add custom apigw responses to the openapi schema
+    see: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-gateway-responses.html
+    """
+    default_cors = {
+        "gatewayresponse.header.Access-Control-Allow-Origin": cors_origins(),
+        "gatewayresponse.header.Access-Control-Allow-Methods": cors_methods(),
+        "gatewayresponse.header.Access-Control-Allow-Headers": cors_headers(),
+    }
+
+    responses = {
+        "DEFAULT_4XX": {
+            "statusCode": 400,
+            "responseTemplates": {
+                "application/json": json.dumps({"message": "Client error occurred"})
+            },
+        },
+        "DEFAULT_5XX": {
+            "statusCode": 500,
+            "responseTemplates": {
+                "application/json": json.dumps({"message": "Internal server error"})
+            },
+        },
+        "ACCESS_DENIED": {
+            "statusCode": 403,
+            "responseTemplates": {
+                "application/json": json.dumps({"message": "Access Denied"})
+            },
+        },
+        "UNAUTHORIZED": {
+            "statusCode": 401,
+            "responseTemplates": {
+                "application/json": json.dumps({"message": "Unauthorized"})
+            },
+        },
+        "MISSING_AUTHENTICATION_TOKEN": {
+            "statusCode": 404,
+            "responseTemplates": {
+                "application/json": json.dumps({"message": "Route not found"})
+            },
+        },
+    }
+
+    if define_cors:
+        for k in responses:
+            responses[k].update({"responseParameters": default_cors})
+
+    return {"x-amazon-apigateway-gateway-responses": responses}
 
 
 if __name__ == "__main__":
@@ -178,7 +255,7 @@ if __name__ == "__main__":
         "--cors",
         default=True,
         action="store_true",
-        help="include CORS methods and resources",
+        help="include CORS methods and resources for pre-flight responses",
     )
 
     args = parser.parse_args()
@@ -208,8 +285,11 @@ if __name__ == "__main__":
         routes=app.routes,
     )
 
-    if args.cors:
-        add_cors_to_openapi(openapi_schema)
+    #    if args.cors:
+    #        add_cors_responses(openapi_schema)
+
+    openapi_schema.update(aws_gateway_responses(args.cors))
+    openapi_schema.update(default_cors_headers(args.cors))
 
     # write the private api definition (wuth all x-amazon-apigateway-integration info)
     private = openapi_schema

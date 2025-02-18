@@ -21,7 +21,7 @@ def mock_integration(
             "default": {
                 "statusCode": 501,
                 "responseTemplates": {
-                    "application/json": '{"status": "not implemented"}'
+                    "application/json": json.dumps({"status": "not implemented"})
                 },
             }
         },
@@ -30,11 +30,18 @@ def mock_integration(
 
 @register_integration("aws_lambda_uri")
 def lambda_integration(
-    uri: str, iam_arn: str, path_parameters: List[str] = None, **kwargs
+    uri: str,
+    iam_arn: str,
+    integration_type="aws_proxy",
+    path_parameters: List[str] = None,
+    request_template: str = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """returns an aws integration description for calling lambdas from apigw.
+
     NB: this return value includes strings relating to resource arns in terraform,
         so the apigw deployment must load this function output and replace these placeholders.
+
     The return value should look like:
         "x-amazon-apigateway-integration": {
             "uri": "${lambda_function_arn}",
@@ -60,35 +67,35 @@ def lambda_integration(
             "path": "/"
             "pathParameters": {...}
         })
-      MB: the format of this pathParameters string is important, see the code for details
-    """
-    request_template = {
-        "body": "$input.json('$')",
-        "httpMethod": "$context.httpMethod",
-        "resource": "$context.resourcePath",
-        "path": "$context.path",
-    }
 
+      MB: the format of this pathParameters string is important, see the code for details
+
+      NB: use "type": "aws" to pass request.body directory, or "aws_proxy" to get request context
+    """
     if path_parameters:
         if not isinstance(path_parameters, list):
             raise ValueError("path_parameters must be a list of strings")
 
-        request_template.update(
-            {
-                "pathParameters": {
-                    name: f"$input.params('{name}')" for name in path_parameters
-                }
-            }
-        )
+        request_parameters = {
+            "integration.request.path.%s" % k: "method.request.path.%s" % k
+            for k in path_parameters
+        }
+    else:
+        request_parameters = None
 
-    response_template = {"default": {"statusCode": "200"}}
+    if request_template:
+        request_template = {"application/json": request_template}
+
+    responses = {"default": {"statusCode": "200"}}
 
     return dict(
         uri=uri,
-        integration_type="aws",
+        integration_type=integration_type,
+        http_method="POST",
         credentials=iam_arn,
         request_template=request_template,
-        response_template=response_template,
+        request_parameters=request_parameters,
+        responses=responses,
     )
 
 
@@ -137,13 +144,17 @@ def step_function_integration_base(
         mapping_template = json.dumps(mapping_template)
 
     request_template = {
-        "input": mapping_template,
-        "stateMachineArn": sfn_arn,
-        "region": "${region}",
+        "application/json": json.dumps(
+            {
+                "input": mapping_template,
+                "stateMachineArn": sfn_arn,
+                "region": "${region}",
+            }
+        )
     }
 
     # FIXME: take response templates as parameters so we can handle errors nicely.
-    response_template = {
+    responses = {
         "default": {
             "statusCode": "200",
             "responseTemplates": {
@@ -155,9 +166,10 @@ def step_function_integration_base(
     return dict(
         uri=uri,
         integration_type="aws",
+        http_method="POST",
         credentials=iam_arn,
         request_template=request_template,
-        response_template=response_template,
+        responses=responses,
     )
 
 
@@ -211,10 +223,12 @@ def s3_integration(
 
     :param bucket_name: Name of the S3 bucket.
     :param iam_arn: IAM role ARN to assume for the integration.
-    :param path_parameters: List of parameters in the API Gateway request path.
+    :param path_parameters: list of path parameters in the apigw request path; if `object_key` is None, the last value here is used as as the object key to lookup
     :param http_method: HTTP method (GET, PUT, DELETE) to use for the integration.
+    :param object_key: [optional] fixed object key to return from the bucket
 
-    # TODO: how should we pass the object key? hardcoded or path parameters are both sensible
+    # TODO: path_parameters could be merged to allow multiple names
+    # TODO: object_key_prefix: allow a key prefix to be used for accessing objects by path parameter
 
     Example OpenAPI integration:
 
@@ -224,12 +238,15 @@ def s3_integration(
         "type": "aws",
         "credentials": "${iam_role_arn}",
         "requestParameters": {
-            "integration.request.path.bucket": "method.request.path.bucket",
+            "integration.request.path.bucket": "bucket_name",
             "integration.request.path.key": "method.request.path.key"
         },
         "responses": {
             "default": {
-                "statusCode": "200"
+                "statusCode": "200",
+                "responseParameters": {
+                    "method.response.header.Content-Type": "'application/octet-stream'"
+                }
             }
         }
     }
@@ -244,6 +261,7 @@ def s3_integration(
     # uri = f"arn:aws:apigateway:${{region}}:s3:path/{bucket_name}/{{key}}"
     # FIXME: add the key parameter here to specify an object; but where should the value coem from?
     #        path_parameters? kwargs?
+    # NB: i think uri should be the bucket arn
     uri = f"arn:aws:apigateway:${{region}}:s3:path/{bucket_name}"
 
     if object_key:
@@ -254,20 +272,35 @@ def s3_integration(
         raise ValueError("expected one of: 'object_key', 'path_parameters'")
 
     # apigw request parameters mapping
-    request_parameters = kwargs.get("request_parameters") or {
-        "integration.request.path.bucket": "method.request.path.bucket",
-        "integration.request.path.key": "method.request.path.key",
-    }
+    request_parameters = kwargs.get("request_parameters")
 
     # response mapping (simple passthrough)
-    response_template = kwargs.get("response_template") or {"default": {"statusCode": "200"}}
+    # FIXME: take the integration response content type to get the object content type
+    default_response_parameters = {
+        "default": {
+            "statusCode": "200",
+            #            "responseParameters": {
+            #                "method.response.header.Content-Type": "integration.response.header.Content-Type"
+            #            },
+        },
+        "4xx": {"statusCode": "404"},
+        "403": {"statusCode": "404"},
+        "404": {"statusCode": "404"},
+    }
+
+    responses = kwargs.get("responses") or default_response_parameters
 
     # generate apigw integration config
-    return dict(
+    integration = dict(
         uri=uri,
         http_method=http_method,
         integration_type="aws",
         credentials=iam_arn,
-        request_template=request_parameters,
-        response_template=response_template,
+        request_parameters=request_parameters,
+        responses=responses,
     )
+
+    if request_parameters:
+        integration["request_parameters"] = request_parameters
+
+    return integration
