@@ -15,7 +15,7 @@ coverage:
 	coverage report
 
 build/library: clean
-	python3 -m build --sdist
+	python3 -m build --wheel
 
 build/image: build/library
 	docker build -t $(PROJECT_NAME):$(TAG) -f Dockerfile .

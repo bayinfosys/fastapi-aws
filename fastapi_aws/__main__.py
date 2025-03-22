@@ -67,34 +67,28 @@ def add_cors_dependency_to_router(router):
             route.dependencies.append(Depends(cors_headers_dependency))
 
 
-def add_cors_responses(openapi_schema):
-    """Add CORS headers to the OpenAPI schema"""
-    for path, methods in openapi_schema["paths"].items():
-        for method, details in methods.items():
-            if "responses" in details:
-                for status, response in details["responses"].items():
-                    headers = response.get("headers") or {}
-                    headers["Access-Control-Allow-Origin"] = {
-                        "schema": {"type": "string"},
-                        #                        "example": "*",
-                    }
-                    headers["Access-Control-Allow-Headers"] = {
-                        "schema": {"type": "string"},
-                        #                        "example": "Content-Type, Authorization, X-Api-Key",
-                    }
-                    headers["Access-Control-Allow-Methods"] = {
-                        "schema": {"type": "string"},
-                        #                        "example": "OPTIONS, GET, POST, PUT, DELETE, PATCH",
-                    }
-                    response["headers"] = headers
-
-    return openapi_schema
+def cors_headers_schema():
+    return {
+        "Access-Control-Allow-Origin": {"schema": {"type": "string"}},
+        "Access-Control-Allow-Methods": {"schema": {"type": "string"}},
+        "Access-Control-Allow-Headers": {"schema": {"type": "string"}},
+    }
 
 
-def add_options_routes(app: FastAPI):
+def cors_response_defaults():
+    return {
+        "method.response.header.Access-Control-Allow-Methods": cors_methods(),
+        "method.response.header.Access-Control-Allow-Headers": cors_headers(),
+        "method.response.header.Access-Control-Allow-Origin": cors_origins(),
+    }
+
+
+def add_cors_preflight_routes(app: FastAPI):
     """automatically add OPTIONS routes for CORS
 
     These are require for the apigw spec, otherwise CORS requests fails.
+
+    NB: these preflight routes are added via fastapi, but we could do directly via schema modification
     """
     opt_router = APIRouter(dependencies=[Depends(cors_headers)])
     rts = [r for r in app.routes if isinstance(r, APIRoute)]
@@ -113,25 +107,14 @@ def add_options_routes(app: FastAPI):
             # include_in_schema=False,
             tags=(route.tags or []) + ["CORS"],
             responses={
-                "200": {
-                    "description": "200 response",
-                    "headers": {
-                        "Access-Control-Allow-Origin": {"schema": {"type": "string"}},
-                        "Access-Control-Allow-Methods": {"schema": {"type": "string"}},
-                        "Access-Control-Allow-Headers": {"schema": {"type": "string"}},
-                    },
-                }
+                "200": {"description": "200 response", "headers": cors_headers_schema()}
             },
             openapi_extra={
                 "x-amazon-apigateway-integration": {
                     "responses": {
                         "default": {
                             "statusCode": "200",
-                            "responseParameters": {
-                                "method.response.header.Access-Control-Allow-Methods": cors_methods(),
-                                "method.response.header.Access-Control-Allow-Headers": cors_headers(),
-                                "method.response.header.Access-Control-Allow-Origin": cors_origins(),
-                            },
+                            "responseParameters": cors_response_defaults(),
                         }
                     },
                     "passthroughBehavior": "when_no_match",
@@ -145,6 +128,62 @@ def add_options_routes(app: FastAPI):
         )
 
     return opt_router
+
+
+def inject_cors_headers(openapi_schema):
+    """Inject CORS headers into all responses in the OpenAPI schema.
+
+    This ensures that all responses (200, 4xx, 5xx, etc.) include:
+    - Access-Control-Allow-Origin
+    - Access-Control-Allow-Headers
+    - Access-Control-Allow-Methods
+
+    Required for AWS API Gateway to properly handle CORS for REST APIs.
+
+    Args:
+        openapi_schema (dict): The OpenAPI JSON schema.
+
+    Returns:
+        dict: Updated OpenAPI schema with CORS headers injected.
+    """
+    cors_headers = cors_headers_schema()
+    cors_response_parameters = cors_response_defaults()
+
+    for path, methods in openapi_schema.get("paths", {}).items():
+        for method, details in methods.items():
+            # Skip OPTIONS, as it's already handled by add_cors_preflight_routes()
+            if method.upper() == "OPTIONS":
+                continue
+
+            # Ensure responses exist
+            if "responses" not in details:
+                details["responses"] = {}
+
+            # Iterate through each response (e.g., 200, 400, 500)
+            for status_code, response in details["responses"].items():
+                if "headers" not in response:
+                    response["headers"] = {}
+
+                # Inject CORS headers into each response
+                response["headers"].update(cors_headers)
+
+            # Ensure x-amazon-apigateway-integration exists
+            if "x-amazon-apigateway-integration" in details:
+                integration = details["x-amazon-apigateway-integration"]
+
+                if "responses" in integration:
+                    for response_key, integration_response in integration[
+                        "responses"
+                    ].items():
+                        if "responseParameters" not in integration_response:
+                            integration_response["responseParameters"] = {}
+
+                        # Inject responseParameters into API Gateway integration responses
+                        integration_response["responseParameters"].update(
+                            cors_response_parameters
+                        )
+
+    return openapi_schema
 
 
 def remove_keys_by_pattern(obj, pattern):
@@ -274,7 +313,7 @@ if __name__ == "__main__":
     # print(app.routes)
 
     if args.cors:
-        app.include_router(add_options_routes(app))
+        app.include_router(add_cors_preflight_routes(app))
 
     # print(app.routes)
 
@@ -290,6 +329,7 @@ if __name__ == "__main__":
 
     openapi_schema.update(aws_gateway_responses(args.cors))
     openapi_schema.update(default_cors_headers(args.cors))
+    openapi_schema = inject_cors_headers(openapi_schema)
 
     # write the private api definition (wuth all x-amazon-apigateway-integration info)
     private = openapi_schema
