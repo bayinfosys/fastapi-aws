@@ -1,8 +1,13 @@
+import logging
+
 from typing import Any, Dict, List
 import json
 
 
 from .route import register_integration
+
+
+logger = logging.getLogger(__name__)
 
 
 @register_integration("mock")
@@ -300,7 +305,88 @@ def s3_integration(
         responses=responses,
     )
 
-    if request_parameters:
-        integration["request_parameters"] = request_parameters
-
     return integration
+
+
+@register_integration("aws_dynamodb_table_name")
+def dynamodb_integration(
+    table_name: str,
+    iam_arn: str,
+    path_parameters: List[str] = None,
+    http_method: str = "POST",
+    mapping_template: str = None,
+    pk_pattern: str = None,
+    sk_pattern: str = None,
+    field_patterns: str = None,
+    **kwargs,
+) -> Dict[str, Any]:
+    """
+    Returns an AWS API Gateway integration for DynamoDB PutItem.
+
+    - POST maps to PutItem.
+    - Required fields in body: owner, project, eventname, timestamp.
+    - PK will be pk_pattern or the default
+    - SK will be sk_pattern or the default
+    - item fields will be field_patterns or 'timestamp=request.time'
+
+    Optional:
+    - mapping_template: override the default template if provided.
+    """
+    # Validate HTTP method
+    if http_method not in ("POST",):
+        raise ValueError(
+            f"Unsupported HTTP method {http_method} for DynamoDB integration. Only POST (PutItem) is allowed."
+        )
+
+    # Define the AWS service integration URI
+    uri = "arn:aws:apigateway:${region}:dynamodb:action/PutItem"
+
+    assert table_name is not None
+
+    default_pk_pattern = "$input.path('$.owner')#$input.path('$.project')"
+    default_sk_pattern = "$input.path('$.project')#$input.path('$.eventname')#$input.path('$.timestamp')"
+    fields_block = field_patterns or '"timestamp": { "S": "$context.requestTime" }'
+
+    # default mapping template if not provided
+    assert mapping_template is None, "mapping_template must be none"
+
+    mapping_template = """
+    {{
+      "TableName": "{table_name}",
+      "Item": {{
+        "PK": {{ "S": "{pk_pattern}" }},
+        "SK": {{ "S": "{sk_pattern}" }},
+        {fields}
+      }}
+    }}
+    """.format(
+        table_name=table_name,
+        pk_pattern=pk_pattern or default_pk_pattern,
+        sk_pattern=sk_pattern or default_sk_pattern,
+        fields=fields_block,
+    )
+
+    logger.info("mapping_template: %s", str(mapping_template))
+
+    request_template = {"application/json": mapping_template}
+
+    # set up request parameters if needed to propagate the request params
+    request_parameters = {
+        "integration.request.header.origin": "method.request.header.origin"
+    }
+
+    responses = {
+        "default": {"statusCode": "200"},
+        "4xx": {"statusCode": "400"},
+        "5xx": {"statusCode": "500"},
+    }
+
+    return dict(
+        uri=uri,
+        integration_type="aws",
+        http_method=http_method,
+        credentials=iam_arn,
+        request_template=request_template,
+        responses=responses,
+        request_parameters=request_parameters
+    )

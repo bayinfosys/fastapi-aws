@@ -52,7 +52,6 @@ class AWSAPIRoute(APIRoute):
         # pop the params from the kwargs to stop fastapi spazzing out
         aws_service_name = selected_services.pop()
         aws_service_value = kwargs.pop(aws_service_name)
-        aws_object_key = kwargs.pop("aws_object_key", None)
 
         aws_iam_arn = kwargs.pop("aws_iam_arn", None)
         if not aws_iam_arn:
@@ -69,6 +68,12 @@ class AWSAPIRoute(APIRoute):
         aws_request_parameters = kwargs.pop("request_parameters", None)
         aws_mapping_template = kwargs.pop("aws_mapping_template", None)
         aws_response_template = kwargs.pop("response_template", None)
+        # s3 integration params
+        aws_object_key = kwargs.pop("aws_object_key", None)
+        # dynamodb item fields
+        aws_pk_pattern = kwargs.pop("dynamodb_item_pk_pattern", None)
+        aws_sk_pattern = kwargs.pop("dynamodb_item_sk_pattern", None)
+        aws_field_pattern = kwargs.pop("dynamodb_item_fields", None)
 
         # this is hack because fastapi does explict member copies resulting in duplicate
         # objects rather than copy-by-reference (which i expect).
@@ -98,6 +103,9 @@ class AWSAPIRoute(APIRoute):
                 response_template=aws_response_template,
                 object_key=aws_object_key,  # NB: s3 only
                 http_method="GET" if "GET" in self.methods else next(iter(self.methods)),
+                pk_pattern=aws_pk_pattern,  # ddb only
+                sk_pattern=aws_sk_pattern,  # ddb only
+                field_patterns=aws_field_pattern,  # ddb only
             )
 
             integration = self._create_integration(**integration_params)

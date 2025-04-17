@@ -28,11 +28,13 @@ Simply use one of the following integration keywords to define the `openapi_extr
 + `aws_sfn_sync_arn` invoke a step-function synchronously
 + `aws_s3_bucket` s3 object access from apigw
 + `mock_response` fixed apigw responses (TBD)
-+ `dynamodb` dynamodb queries via apigw endpoints (TBD)
++ `aws_dynamodb_table_name` dynamodb `PutItem` and `GetItem`  via apigw endpoints
 
 The keyword-argument is used to define the format of the `x-amazon-apigateway-integration` added to the `openapi_extra` parameter.
 
 **NOTE**: the default `FastAPI.router` should be replaced with a new `AWSAPIRouter` **before** adding any routes. If routes are added to the router, and the `app.include_router(aws_router)` is called, the `app.include_router` method will fail to pass the aws kwargs and cause the `AWSAPIRoute` to throw a `ValueError`. This is due to FastAPI sanitizing the kwargs to routes.
+
+**NOTE**: if an AWS integration requires access to a HTTP header (`origin`, etc) you must set the header as a parameter of the handler function for it to be included in the `openapi.json` spec.
 
 
 ```python

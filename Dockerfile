@@ -2,11 +2,11 @@ FROM python:3.9-slim
 
 #RUN apt-get update && apt-get install -q -y git
 
-COPY ./dist/fastapi_aws-*.tar.gz .
+COPY ./dist/fastapi_aws-*.whl .
 
 COPY ./requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
-RUN pip install --no-cache-dir *.tar.gz
+RUN pip install --no-cache-dir *.whl
 
 WORKDIR /app
 
