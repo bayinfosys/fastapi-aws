@@ -1,4 +1,4 @@
-PROJECT_NAME=fastapi_aws
+PROJECT_NAME=bayis/fastapi_aws
 TAG?=$(shell git describe --tags)
 
 .PHONY: build/image
@@ -22,3 +22,6 @@ build/image: build/library
 
 test/image:
 	docker run -it --rm $(PROJECT_NAME):$(TAG) --help
+
+deploy:
+	twine upload dist/*

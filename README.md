@@ -29,6 +29,10 @@ Simply use one of the following integration keywords to define the `openapi_extr
 + `aws_s3_bucket` s3 object access from apigw
 + `mock_response` fixed apigw responses (TBD)
 + `aws_dynamodb_table_name` dynamodb `PutItem` and `GetItem`  via apigw endpoints
+    + this integration creates a `mapping_template` in `VTL` to convert the `POST` body to a dynamodb `Item`.
+    + custom fields can be set, and `POST` body parameters referenced with `$body.<field_name>`.
+    + `POST` object is **not** validated against the pydantic model (TBD)
+    + a value `$expiration` is set as `$context.requestTimeEpoch)` + 1 month for use as a `ttl` field.
 
 The keyword-argument is used to define the format of the `x-amazon-apigateway-integration` added to the `openapi_extra` parameter.
 

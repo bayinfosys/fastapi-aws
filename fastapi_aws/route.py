@@ -99,7 +99,6 @@ class AWSAPIRoute(APIRoute):
                 path_parameters=path_parameters,
                 mapping_template=aws_mapping_template,
                 request_template=aws_request_template,
-                request_parameters=aws_request_parameters,
                 response_template=aws_response_template,
                 object_key=aws_object_key,  # NB: s3 only
                 http_method="GET" if "GET" in self.methods else next(iter(self.methods)),
@@ -108,6 +107,14 @@ class AWSAPIRoute(APIRoute):
                 field_patterns=aws_field_pattern,  # ddb only
             )
 
+            # NB: request_parameters are not passed to the integration handler, but may be output,
+            # so merge the emitted request_parameters with the input values here
+            if "request_parameters" in integration_params and aws_request_parameters:
+                integration_params["request_paramters"].update(aws_request_parameters)
+            elif aws_request_parameters:
+                integration_params["request_parameters"] = aws_request_parameters
+
+            # create a final integration object
             integration = self._create_integration(**integration_params)
 
         if self.openapi_extra is None:

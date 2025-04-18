@@ -276,9 +276,6 @@ def s3_integration(
     else:
         raise ValueError("expected one of: 'object_key', 'path_parameters'")
 
-    # apigw request parameters mapping
-    request_parameters = kwargs.get("request_parameters")
-
     # response mapping (simple passthrough)
     # FIXME: take the integration response content type to get the object content type
     default_response_parameters = {
@@ -301,7 +298,6 @@ def s3_integration(
         http_method=http_method,
         integration_type="aws",
         credentials=iam_arn,
-        request_parameters=request_parameters,
         responses=responses,
     )
 
@@ -346,21 +342,28 @@ def dynamodb_integration(
     default_pk_pattern = "$input.path('$.owner')#$input.path('$.project')"
     default_sk_pattern = "$input.path('$.project')#$input.path('$.eventname')#$input.path('$.timestamp')"
     fields_block = field_patterns or '"timestamp": { "S": "$context.requestTime" }'
+    default_ttl = 2592000
 
     # default mapping template if not provided
     assert mapping_template is None, "mapping_template must be none"
 
+    # FIXME: i think we should let the caller set the entire mapping template
     mapping_template = """
-    {{
-      "TableName": "{table_name}",
-      "Item": {{
-        "PK": {{ "S": "{pk_pattern}" }},
-        "SK": {{ "S": "{sk_pattern}" }},
-        {fields}
-      }}
-    }}
-    """.format(
+#set($body = $util.parseJson($input.body))
+
+#set($nowEpochSeconds = $context.requestTimeEpoch / 1000)
+#set($expiration = $nowEpochSeconds + {ttl})
+
+{{
+  "TableName": "{table_name}",
+  "Item": {{
+    "PK": {{ "S": "{pk_pattern}" }},
+    "SK": {{ "S": "{sk_pattern}" }},
+    {fields}
+  }}
+}}""".format(
         table_name=table_name,
+        ttl=default_ttl,
         pk_pattern=pk_pattern or default_pk_pattern,
         sk_pattern=sk_pattern or default_sk_pattern,
         fields=fields_block,
