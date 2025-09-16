@@ -5,7 +5,7 @@ TAG?=$(shell git describe --tags)
 
 clean:
 	rm -drf dist
-	docker rmi -f $(PROJECT_NAME):$(TAG)
+	docker rmi -f $(PROJECT_NAME):$(TAG) || exit
 
 test:
 	python -m unittest -v tests/*.py
@@ -25,3 +25,5 @@ test/image:
 
 deploy:
 	twine upload dist/*
+
+all: clean build/library build/image deploy

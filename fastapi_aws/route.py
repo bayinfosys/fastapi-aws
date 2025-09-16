@@ -1,6 +1,11 @@
+import logging
+
 from fastapi.routing import APIRoute
 from typing import Any, Callable, List
 from string import Formatter
+
+
+logger = logging.getLogger(__name__)
 
 
 def register_integration(service_name: str):
@@ -74,6 +79,7 @@ class AWSAPIRoute(APIRoute):
         aws_pk_pattern = kwargs.pop("dynamodb_item_pk_pattern", None)
         aws_sk_pattern = kwargs.pop("dynamodb_item_sk_pattern", None)
         aws_field_pattern = kwargs.pop("dynamodb_item_fields", None)
+        aws_query_expr = kwargs.pop("dynamodb_query_expr", None)
 
         # this is hack because fastapi does explict member copies resulting in duplicate
         # objects rather than copy-by-reference (which i expect).
@@ -99,12 +105,13 @@ class AWSAPIRoute(APIRoute):
                 path_parameters=path_parameters,
                 mapping_template=aws_mapping_template,
                 request_template=aws_request_template,
-                response_template=aws_response_template,
+                # response_template=aws_response_template,
                 object_key=aws_object_key,  # NB: s3 only
                 http_method="GET" if "GET" in self.methods else next(iter(self.methods)),
                 pk_pattern=aws_pk_pattern,  # ddb only
                 sk_pattern=aws_sk_pattern,  # ddb only
                 field_patterns=aws_field_pattern,  # ddb only
+                query_expr=aws_query_expr,  # ddb only
             )
 
             # NB: request_parameters are not passed to the integration handler, but may be output,
@@ -113,6 +120,10 @@ class AWSAPIRoute(APIRoute):
                 integration_params["request_paramters"].update(aws_request_parameters)
             elif aws_request_parameters:
                 integration_params["request_parameters"] = aws_request_parameters
+
+            # NB: response template overrides anything returned by integration_fn here
+            if aws_response_template:
+                integration_params["response_template"] = aws_response_template
 
             # create a final integration object
             integration = self._create_integration(**integration_params)
@@ -135,6 +146,7 @@ class AWSAPIRoute(APIRoute):
         responses: dict = None,
         request_template: dict = None,
         request_parameters: dict = None,
+        response_template: dict = None,
         http_method: str = "POST",
     ):
         """create the x-amazon-apigateway-integration block for the openapi spec
@@ -153,16 +165,18 @@ class AWSAPIRoute(APIRoute):
         + request_parameters: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestParameters.html
         + responses: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-response.html
         """
+        def validate_template(template):
+            """validate a template as best we can"""
+            assert isinstance(template, dict), "template must be dict [%s]" % (str(type(template)))
+
+            template_mimetypes = ("application/json", "application/xml")
+            assert all(x_ in template_mimetypes for x_ in template), "only mimetypes are expected in templates (found: '%s')" % str(list(template.keys()))
+            assert all(isinstance(x_, str) for x_ in template), "all templates must be strings (found: '%s')" % (str([str(type(x)) for x in template.values()]))
+
         assert integration_type in ("aws", "aws_proxy")
 
-        assert isinstance(responses, dict), "responses must be a dict [%s]" % str(
-            type(responses)
-        )
-        assert (
-            "default" in responses
-        ), "expected 'default' in responses (recieved: '%s')" % str(
-            list(responses.keys())
-        )
+        assert isinstance(responses, dict), "responses must be a dict [%s]" % str(type(responses))
+        assert ("default" in responses), "expected 'default' in responses (recieved: '%s')" % str(list(responses.keys()))
 
         integration = {
             "uri": uri,
@@ -172,33 +186,25 @@ class AWSAPIRoute(APIRoute):
             "responses": responses,
         }
 
-        if request_template is not None:
+        if request_template:
             # request templates must be a dict of mimetypes to strings
             # https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestTemplates.html
-            assert isinstance(
-                request_template, dict
-            ), "request_template must be dict [%s]" % (str(type(request_template)))
-
-            request_template_mimetypes = ("application/json", "application/xml")
-            assert all(
-                x_ in request_template_mimetypes for x_ in request_template
-            ), "only mimetypes are expected in request_templates (found: '%s')" % str(
-                list(request_template.keys())
-            )
-            assert all(
-                isinstance(x_, str) for x_ in request_template
-            ), "all request templates must be strings (found: '%s')" % (
-                str([str(type(x)) for x in request_template.values()])
-            )
-
+            validate_template(request_template)
             integration["requestTemplates"] = request_template
 
-        if request_parameters is not None:
+        if request_parameters:
             # TODO: validate against: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestParameters.html
-            assert isinstance(
-                request_parameters, dict
-            ), "request_parameters must be dict [%s]" % str(type(request_parameters))
+            assert isinstance(request_parameters, dict), "request_parameters must be dict [%s]" % str(type(request_parameters))
             integration["requestParameters"] = request_parameters
+
+        if response_template:
+            validate_template(response_template)
+            if "default" not in integration["responses"]:
+                logger.warning("expected 'default' response for response_template")
+            elif "responseTemplate" in integration["responses"]["default"]:
+                logger.warning("existing responseTemplate in 'default', ignoring custom")
+            else:
+                integration["responses"]["default"]["responseTemplates"] = response_template
 
         return {"x-amazon-apigateway-integration": integration}
 

@@ -40,6 +40,7 @@ def lambda_integration(
     integration_type="aws_proxy",
     path_parameters: List[str] = None,
     request_template: str = None,
+    responses_template: str = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """returns an aws integration description for calling lambdas from apigw.
@@ -62,7 +63,6 @@ def lambda_integration(
                 })
             }
         }
-      There is also a "responses" key which we should set to reformat the output, but do not yet.
       The optional "path_parameters" parameter is a list of variable path elements
       which are added to the requestTemplate:
         "application/json": json.dumps({
@@ -75,7 +75,8 @@ def lambda_integration(
 
       MB: the format of this pathParameters string is important, see the code for details
 
-      NB: use "type": "aws" to pass request.body directory, or "aws_proxy" to get request context
+    NB: if `integration_type` is `aws_proxy` the lambda must return cors headers directly.
+    NB: use "type": "aws" to pass request.body directory, or "aws_proxy" to get request context
     """
     if path_parameters:
         if not isinstance(path_parameters, list):
@@ -91,7 +92,11 @@ def lambda_integration(
     if request_template:
         request_template = {"application/json": request_template}
 
+    # TODO: add responses_template
     responses = {"default": {"statusCode": "200"}}
+
+    if responses_template:
+        responses["default"].update(responses_template)
 
     return dict(
         uri=uri,
@@ -314,6 +319,7 @@ def dynamodb_integration(
     pk_pattern: str = None,
     sk_pattern: str = None,
     field_patterns: str = None,
+    query_expr: str = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -328,27 +334,8 @@ def dynamodb_integration(
     Optional:
     - mapping_template: override the default template if provided.
     """
-    # Validate HTTP method
-    if http_method not in ("POST",):
-        raise ValueError(
-            f"Unsupported HTTP method {http_method} for DynamoDB integration. Only POST (PutItem) is allowed."
-        )
-
-    # Define the AWS service integration URI
-    uri = "arn:aws:apigateway:${region}:dynamodb:action/PutItem"
-
-    assert table_name is not None
-
-    default_pk_pattern = "$input.path('$.owner')#$input.path('$.project')"
-    default_sk_pattern = "$input.path('$.project')#$input.path('$.eventname')#$input.path('$.timestamp')"
-    fields_block = field_patterns or '"timestamp": { "S": "$context.requestTime" }'
-    default_ttl = 2592000
-
-    # default mapping template if not provided
-    assert mapping_template is None, "mapping_template must be none"
-
-    # FIXME: i think we should let the caller set the entire mapping template
-    mapping_template = """
+    def create_put_item_mapping_template(table_name, ttl, pk_pattern, sk_pattern, fields):
+        return """
 #set($body = $util.parseJson($input.body))
 
 #set($nowEpochSeconds = $context.requestTimeEpoch / 1000)
@@ -361,22 +348,59 @@ def dynamodb_integration(
     "SK": {{ "S": "{sk_pattern}" }},
     {fields}
   }}
-}}""".format(
-        table_name=table_name,
-        ttl=default_ttl,
-        pk_pattern=pk_pattern or default_pk_pattern,
-        sk_pattern=sk_pattern or default_sk_pattern,
-        fields=fields_block,
-    )
+}}""".format(table_name=table_name, ttl=ttl, pk_pattern=pk_pattern, sk_pattern=sk_pattern, fields=fields)
+
+    def create_query_mapping_template(table_name: str, query_expr: str):
+        """we cannot parameterise this, the user must supply vtl.
+        ref: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html#API_Query_Examples
+
+        example:
+    {
+    "IndexName": "PostedBy-Index",
+    "Limit": 3,
+    "ConsistentRead": true,
+    "ProjectionExpression": "Id, PostedBy, ReplyDateTime",
+    "KeyConditionExpression": "Id = :v1 AND PostedBy BETWEEN :v2a AND :v2b",
+    "ExpressionAttributeValues": {
+        ":v1": {"S": "Amazon DynamoDB#DynamoDB Thread 1"},
+        ":v2a": {"S": "User A"},
+        ":v2b": {"S": "User C"}
+    }"""
+        return """
+{{
+    "TableName": "{table_name}", {query_expr}
+}}""".format(table_name=table_name, query_expr=query_expr)
+
+    assert table_name is not None
+    # default mapping template if not provided
+    assert mapping_template is None, "mapping_template must be none"
+
+    # Define the AWS service integration URI
+    # FIXME: i think we should let the caller set the entire mapping template
+    if http_method == "POST":
+        default_pk_pattern = "$input.path('$.owner')#$input.path('$.project')"
+        default_sk_pattern = "$input.path('$.project')#$input.path('$.eventname')#$input.path('$.timestamp')"
+        fields_block = field_patterns or '"timestamp": { "S": "$context.requestTime" }'
+        default_ttl = 2592000
+
+        uri = "arn:aws:apigateway:${region}:dynamodb:action/PutItem"
+        mapping_template = create_put_item_mapping_template(table_name, ttl=default_ttl, pk_pattern=pk_pattern or default_pk_pattern, sk_pattern=sk_pattern or default_sk_pattern, fields=fields_block)
+    elif http_method == "GET":
+        assert query_expr is not None
+        uri = "arn:aws:apigateway:${region}:dynamodb:action/Query"
+        mapping_template = create_query_mapping_template(table_name, query_expr=query_expr)
+    else:
+        raise ValueError(f"Unsupported HTTP method {http_method} for DynamoDB integration. Only POST (PutItem) or GET (Query) is allowed.")
 
     logger.info("mapping_template: %s", str(mapping_template))
 
     request_template = {"application/json": mapping_template}
 
+    request_parameters = kwargs.pop("request_parameters", {})
+
     # set up request parameters if needed to propagate the request params
-    request_parameters = {
-        "integration.request.header.origin": "method.request.header.origin"
-    }
+    if any(("$input.params('origin')" in (field or "") for field in [pk_pattern, sk_pattern, field_patterns, query_expr])):
+        request_parameters.update({"integration.request.header.origin": "method.request.header.origin"})
 
     responses = {
         "default": {"statusCode": "200"},
@@ -387,7 +411,7 @@ def dynamodb_integration(
     return dict(
         uri=uri,
         integration_type="aws",
-        http_method=http_method,
+        http_method="POST",
         credentials=iam_arn,
         request_template=request_template,
         responses=responses,

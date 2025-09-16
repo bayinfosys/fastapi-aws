@@ -90,11 +90,16 @@ class CognitoAuthorizer(AWSAuthorizer):
         )
 
     def _create_model(self):
+        if len(self.header_names) > 1:
+            logger.warning("headers '%s' ignored", str(self.header_names[1:]))
+
+        auth_header_name = self.header_names[0]
+
         return APIKey(
             **{
                 "type": "apiKey",
                 "in": "header",
-                "name": self.scheme_name,
+                "name": auth_header_name,  # NB: "name" is the header field; fkin useless.
                 "x-amazon-apigateway-authtype": "cognito_user_pools",
                 "x-amazon-apigateway-authorizer": {
                     "type": self.authorizer_type,
