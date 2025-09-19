@@ -1,3 +1,4 @@
+import json
 import logging
 
 from fastapi.routing import APIRoute
@@ -21,112 +22,157 @@ def register_integration(service_name: str):
 
 
 class AWSAPIRoute(APIRoute):
-    """fastapi.apiroute derived class adapted for aws service integrations
-    This will provide an openapi json description of an aws service integration
-    for a route, allowing the openapi spec to be uploaded as an aws apigw rest
-    service automativicly.
+    """FastAPI APIRoute derived class adapted for AWS service integrations.
+
+    This provides an OpenAPI JSON description of AWS service integrations
+    for routes, allowing the OpenAPI spec to be uploaded as an AWS API Gateway
+    REST service automatically.
     """
 
     _integration_registry = {}  # registered service integrations
 
     def __init__(self, path: str, endpoint: Callable[..., Any], **kwargs: Any):
-        """overload the APIRoute constructor
+        """Overload the APIRoute constructor to handle AWS integrations.
 
-        This has to happen because we cannot just pass kwargs around fastapi.
-        Probably for code highlighting or smth but the internal fastapi include_router
-        functions copy objects by explicity listing all the fields of the objects, so
-        our derived class cannot have custom fields and use the app or router functions.
+        This has to happen because we cannot just pass kwargs around FastAPI.
+        Probably for code highlighting or something, but the internal FastAPI
+        include_router functions copy objects by explicitly listing all the fields
+        of the objects, so our derived class cannot have custom fields and use the
+        app or router functions.
 
-        Futhermore, the super-constructor removes or resets fields when it is called.
+        Furthermore, the super-constructor removes or resets fields when it is called.
 
-        very frustrating, up yours fastapi
+        Very frustrating, up yours FastAPI.
+
+        Args:
+            path: The route path pattern
+            endpoint: The route handler function
+            **kwargs: Route parameters, including AWS integration parameters
         """
-        # validate the route args contain an aws service entry for which we have an integration
-        # and an entry for 'aws_iam_arn' for permission to call that service.
+        # Extract and validate AWS parameters before calling super()
+        service_name, service_value, iam_arn, aws_kwargs = self._extract_aws_args(kwargs)
+
+        # Preserve openapi_extra before super() clears it
+        # This is a hack because FastAPI does explicit member copies resulting in
+        # duplicate objects rather than copy-by-reference (which I expect).
+        self.openapi_extra = kwargs.pop("openapi_extra", {})
+
+        # Call FastAPI's constructor with cleaned kwargs
+        super().__init__(path, endpoint, **kwargs)
+
+        # If no AWS integration, we're done
+        if not service_name:
+            return
+
+        # Build and apply the AWS integration
+        self._apply_aws_integration(service_name, service_value, iam_arn, aws_kwargs)
+
+    def _extract_aws_args(self, kwargs: dict):
+        """Extract AWS-specific arguments from kwargs, leaving FastAPI args intact.
+
+        Validates that route args contain exactly one AWS service entry for which
+        we have an integration, and an entry for 'aws_iam_arn' for permission to
+        call that service.
+
+        The AWS parameters are removed from kwargs to prevent FastAPI from crashing
+        on unrecognised keyword arguments in the super() call, but the values are
+        preserved for integration building.
+
+        Args:
+            kwargs: The original route kwargs dict (modified in-place)
+
+        Returns:
+            tuple: (aws_kwargs dict with extracted parameters, selected_service_name or None)
+
+        Raises:
+            ValueError: If multiple AWS services specified or aws_iam_arn missing
+        """
+        # Find which AWS service integration is requested
         selected_services = set(self._integration_registry).intersection(set(kwargs))
 
         if not selected_services:
-            # no aws integration in this route, so just call super
-            return super().__init__(path, endpoint, **kwargs)
+            return {}, None
 
         if len(selected_services) > 1:
             raise ValueError(
-                f"Exactly one of {self._integration_registry.keys()} is required, but found {selected_services} in {kwargs.keys()}"
+                f"Exactly one of {list(self._integration_registry.keys())} is required, "
+                f"but found {selected_services} in {list(kwargs.keys())}"
             )
 
-        # pop the params from the kwargs to stop fastapi spazzing out
-        aws_service_name = selected_services.pop()
-        aws_service_value = kwargs.pop(aws_service_name)
+        selected_service = selected_services.pop()
+        service_value = kwargs.pop(selected_service)
+        iam_arn = kwargs.pop("aws_iam_arn", None)
 
-        aws_iam_arn = kwargs.pop("aws_iam_arn", None)
-        if not aws_iam_arn:
+        # Validate required parameters
+        if not iam_arn:
             raise ValueError("'aws_iam_arn' is required for AWS integrations.")
 
-        # extract the path parmaeters
-        if hasattr(self, "path_format"):
-            path_parameters = self._extract_path_parameters(self.path_format)
-        else:
-            path_parameters = []
+        # Extract all AWS parameters (removing from kwargs to prevent FastAPI crashes)
+        aws_kwargs = {
+            # VTL templates
+            "vtl_request_template": kwargs.pop("aws_vtl_request_template", None),
+            "vtl_responses_template": kwargs.pop("aws_vtl_responses_template", None),
+            "vtl_mapping_template": kwargs.pop("aws_vtl_mapping_template", None),
 
-        # extract the mapping templates if present
-        aws_request_template = kwargs.pop("request_template", None)
-        aws_request_parameters = kwargs.pop("request_parameters", None)
-        aws_mapping_template = kwargs.pop("aws_mapping_template", None)
-        aws_response_template = kwargs.pop("response_template", None)
-        # s3 integration params
-        aws_object_key = kwargs.pop("aws_object_key", None)
-        # dynamodb item fields
-        aws_pk_pattern = kwargs.pop("dynamodb_item_pk_pattern", None)
-        aws_sk_pattern = kwargs.pop("dynamodb_item_sk_pattern", None)
-        aws_field_pattern = kwargs.pop("dynamodb_item_fields", None)
-        aws_query_expr = kwargs.pop("dynamodb_query_expr", None)
+            # Service-specific parameters
+            "s3_object_key": kwargs.pop("aws_s3_object_key", None),
+            "dynamodb_pk_pattern": kwargs.pop("aws_dynamodb_pk_pattern", None),
+            "dynamodb_sk_pattern": kwargs.pop("aws_dynamodb_sk_pattern", None),
+            "dynamodb_fields": kwargs.pop("aws_dynamodb_fields", None),
+            "dynamodb_query_expr": kwargs.pop("aws_dynamodb_query_expr", None),
 
-        # this is hack because fastapi does explict member copies resulting in duplicate
-        # objects rather than copy-by-reference (which i expect).
-        self.openapi_extra = kwargs.pop("openapi_extra", {})
+            # SNS parameters
+            "sns_subject_template": kwargs.pop("aws_sns_subject_template", None),
+            "sns_message_template": kwargs.pop("aws_sns_message_template", None),
 
-        # APIRoute clears openapi_extra here if it is set, so preseve it before calling the super constructor
-        if "x-amazon-apigateway-integration" in self.openapi_extra:
-            integration = self.openapi_extra
-        else:
-            integration = None
+            # Generic parameters
+            "request_parameters": kwargs.pop("aws_request_parameters", None),
+        }
 
-        super().__init__(path, endpoint, **kwargs)
+        return selected_service, service_value, iam_arn, aws_kwargs
 
-        # if we already have the x-int, it has been copied over the super constructor
-        # so do not build a new integration
-        if not integration:
-            # find the integration which matches one of our kwargs
-            integration_fn = self._integration_registry[aws_service_name]
+    def _apply_aws_integration(self, service_name: str, service_value: str, iam_arn: str, aws_kwargs: dict):
+        """Build and apply AWS integration using extracted parameters.
 
-            integration_params = integration_fn(
-                aws_service_value,
-                iam_arn=aws_iam_arn,
-                path_parameters=path_parameters,
-                mapping_template=aws_mapping_template,
-                request_template=aws_request_template,
-                # response_template=aws_response_template,
-                object_key=aws_object_key,  # NB: s3 only
-                http_method="GET" if "GET" in self.methods else next(iter(self.methods)),
-                pk_pattern=aws_pk_pattern,  # ddb only
-                sk_pattern=aws_sk_pattern,  # ddb only
-                field_patterns=aws_field_pattern,  # ddb only
-                query_expr=aws_query_expr,  # ddb only
-            )
+        Creates the x-amazon-apigateway-integration block for the OpenAPI spec
+        by calling the appropriate registered integration function and merging
+        the result into openapi_extra.
 
-            # NB: request_parameters are not passed to the integration handler, but may be output,
-            # so merge the emitted request_parameters with the input values here
-            if "request_parameters" in integration_params and aws_request_parameters:
-                integration_params["request_paramters"].update(aws_request_parameters)
-            elif aws_request_parameters:
-                integration_params["request_parameters"] = aws_request_parameters
+        Args:
+            service_name: The AWS service integration to use (e.g. 'aws_lambda_uri')
+            aws_kwargs: Dict of extracted AWS parameters
+        """
+        # extract path parameters from route path
+        path_parameters = self._extract_path_parameters(self.path)
 
-            # NB: response template overrides anything returned by integration_fn here
-            if aws_response_template:
-                integration_params["response_template"] = aws_response_template
+        # get the integration function for this service
+        integration_fn = self._integration_registry[service_name]
 
-            # create a final integration object
+        # add common parameters to aws_kwargs
+        aws_kwargs.update({
+            "path_parameters": path_parameters,
+            "http_method": "GET" if "GET" in self.methods else next(iter(self.methods)),
+        })
+
+        # call the integration
+        try:
+            integration_params = integration_fn(service_value, iam_arn, **aws_kwargs)
+        except Exception as e:
+            logger.exception("'%s' does not accept '%s'", str(integration_fn), json.dumps(aws_kwargs))
+            raise e
+
+        # FIXME: we want to retain certain parameters (pass-throughs) from the
+        # aws_kwargs after the integration_fn __if and only if__ the integration
+        # doesn't add it's own. This ensures vtl_response_templates are preserved.
+        # Currently, an integration may silently drop some parameters by not returning
+        # them and this causes kwargs from the route decorator to disappear.
+
+        # create the final integration object
+        try:
             integration = self._create_integration(**integration_params)
+        except Exception as e:
+            logger.exception("'%s' unable to build integration with '%s'", str(integration_fn), json.dumps(integration_params))
+            raise e
 
         if self.openapi_extra is None:
             self.openapi_extra = {}
@@ -144,9 +190,9 @@ class AWSAPIRoute(APIRoute):
         integration_type: str,
         credentials: str,
         responses: dict = None,
-        request_template: dict = None,
+        vtl_request_template: dict = None,
         request_parameters: dict = None,
-        response_template: dict = None,
+        vtl_responses_template: dict = None,
         http_method: str = "POST",
     ):
         """create the x-amazon-apigateway-integration block for the openapi spec
@@ -186,25 +232,27 @@ class AWSAPIRoute(APIRoute):
             "responses": responses,
         }
 
-        if request_template:
+        if vtl_request_template:
             # request templates must be a dict of mimetypes to strings
             # https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestTemplates.html
-            validate_template(request_template)
-            integration["requestTemplates"] = request_template
+            validate_template(vtl_request_template)
+            integration["requestTemplates"] = vtl_request_template
 
         if request_parameters:
             # TODO: validate against: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-swagger-extensions-integration-requestParameters.html
             assert isinstance(request_parameters, dict), "request_parameters must be dict [%s]" % str(type(request_parameters))
             integration["requestParameters"] = request_parameters
 
-        if response_template:
-            validate_template(response_template)
+        if vtl_responses_template:
+            validate_template(vtl_responses_template)
             if "default" not in integration["responses"]:
                 logger.warning("expected 'default' response for response_template")
+                raise ValueError()
             elif "responseTemplate" in integration["responses"]["default"]:
                 logger.warning("existing responseTemplate in 'default', ignoring custom")
+                raise ValueError("2")
             else:
-                integration["responses"]["default"]["responseTemplates"] = response_template
+                integration["responses"]["default"]["responseTemplates"] = vtl_responses_template
 
         return {"x-amazon-apigateway-integration": integration}
 

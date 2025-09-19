@@ -6,27 +6,27 @@ from fastapi_aws.route import AWSAPIRoute
 class TestCreateIntegration(unittest.TestCase):
     def test_create_integration_lambda(self):
         params = {
-            "aws_lambda_uri": "${my_function_uri}",
+            "aws_lambda_arn": "${my_function_uri}",
             "aws_iam_arn": "${iam_role_arn}",
-            "request_template": {
+            "aws_vtl_request_template": {
                 "body": "$input.json('$')",
                 "httpMethod": "$context.httpMethod",
                 "resource": "$context.resourcePath",
                 "path": "$context.path",
             },
-            "response_template": {"default": {"statusCode": "200"}},
+            "aws_vtl_response_template": {"default": {"statusCode": "200"}},
         }
 
         expected_output = {
             "x-amazon-apigateway-integration": {
-                "uri": params["aws_lambda_uri"],
+                "uri": params["aws_lambda_arn"],
                 "httpMethod": "POST",
-                "type": "aws",
+                "type": "aws_proxy",
                 "credentials": params["aws_iam_arn"],
                 "requestTemplates": {
-                    "application/json": json.dumps(params["request_template"])
+                    "application/json": params["aws_vtl_request_template"]
                 },
-                "responses": params["response_template"],
+                "responses": params["aws_vtl_response_template"],
             }
         }
 
@@ -45,24 +45,25 @@ class TestCreateIntegration(unittest.TestCase):
             #                "method.response.header.Content-Type": "integration.response.header.Content-Type",
             #                "method.response.header.Timestamp": "integration.response.header.Date",
             #            },
-            "aws_object_key": "${my_object_key}"
+            "aws_s3_object_key": "${my_object_key}"
         }
 
         expected_output = {
             "x-amazon-apigateway-integration": {
-                "uri": "arn:aws:apigateway:${region}:s3:path/%s/%s" % (params["aws_s3_bucket"], params["aws_object_key"]),
+                "uri": "arn:aws:apigateway:${region}:s3:path/%s/%s" % (params["aws_s3_bucket"], params["aws_s3_object_key"]),
                 "httpMethod": "GET",
                 "type": "aws",
                 "credentials": "${my_role_arn}",
-                "requestTemplates": {
-                    "application/json": json.dumps(
-                        {
-                            "integration.request.path.bucket": "method.request.path.bucket",
-                            "integration.request.path.key": "method.request.path.key",
-                        }
-                    )
-                },
+#                "requestTemplates": {
+#                    "application/json": {
+#                        "integration.request.path.bucket": "method.request.path.bucket",
+#                        "integration.request.path.key": "method.request.path.key",
+#                    }
+#                },
                 "responses": {
+                    "403": {"statusCode": "404"},
+                    "404": {"statusCode": "404"},
+                    "4xx": {"statusCode": "404"},
                     "default": {"statusCode": "200"},
                     #                    "responseParameters": params["response_template"],
                 },

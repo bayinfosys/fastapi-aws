@@ -5,7 +5,7 @@ setup(
     use_scm_version={
         "write_to": "fastapi_aws/_version.py",
     },
-    packages=["fastapi_aws"],
+    packages=["fastapi_aws", "fastapi_aws.integrations"],
     install_requires=[
         "fastapi",
         "httpx",

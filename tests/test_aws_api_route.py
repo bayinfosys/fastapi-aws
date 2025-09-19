@@ -12,7 +12,7 @@ class TestAWSAPIRoute(unittest.TestCase):
 
         @router.get(
             "/lambda-test",
-            aws_lambda_uri="${lambda_function_arn}",
+            aws_lambda_arn="${lambda_function_arn}",
             aws_iam_arn="${lambda_role_arn}",
             description="Test Lambda",
             summary="Lambda Test",
