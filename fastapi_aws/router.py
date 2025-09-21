@@ -2,10 +2,12 @@
 
 inherited from APIRouter so we can pass kwargs to get, post, put, delete decorators
 """
-from fastapi import APIRouter
-from fastapi.types import DecoratedCallable
-from typing import Any, Callable, Optional, Type
 
+from typing import Any, Callable, Type
+
+from fastapi import APIRouter
+from fastapi.routing import APIRoute
+from fastapi.types import DecoratedCallable
 
 from .route import AWSAPIRoute
 
@@ -15,16 +17,27 @@ class AWSAPIRouter(APIRouter):
         super().__init__(*args, route_class=route_class, **kwargs)
 
     def add_api_route(
-        self,
-        path: str,
-        endpoint: Callable[..., Any],
-        **kwargs: Any
+        self, path: str, endpoint: Callable[..., Any], **kwargs: Any
     ) -> None:
         route_class = kwargs.pop("route_class_override", None) or self.route_class
-        route = route_class(path, endpoint, **kwargs)
+
+        # check if this route has AWS integration parameters
+        aws_services = set(AWSAPIRoute._integration_registry or {}).intersection(
+            set(kwargs)
+        )
+
+        if aws_services or "aws_iam_arn" in kwargs:
+            # this route has AWS integrations, use AWSAPIRoute
+            route = route_class(path, endpoint, **kwargs)
+        else:
+            # no aws integrations, use standard APIRoute to avoid processing AWS args
+            route = APIRoute(path, endpoint, **kwargs)
+
         self.routes.append(route)
 
-    def api_route(self, path: str, **kwargs: Any) -> Callable[[DecoratedCallable], DecoratedCallable]:
+    def api_route(
+        self, path: str, **kwargs: Any
+    ) -> Callable[[DecoratedCallable], DecoratedCallable]:
         def decorator(func: DecoratedCallable) -> DecoratedCallable:
             self.add_api_route(path, func, **kwargs)
             return func
